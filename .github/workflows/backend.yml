@@ -2,7 +2,7 @@ name: Pipeline 2 - Backend Docs Generator
 
 on:
   # schedule:
-  #   - cron: '30 18 * * *' # Testing pass hone ke baad uncomment kar lena
+  #   - cron: '30 18 * * *' # Final testing pass hone ke baad uncomment kar lena
   workflow_dispatch:
 
 concurrency:
@@ -44,7 +44,7 @@ jobs:
           for i in $(seq 1 30); do
             if curl -s -o /dev/null http://localhost:8082; then break; fi
             if ! kill -0 "$APP_PID" 2>/dev/null; then cat /tmp/app.log; exit 1; fi
-            sleep 2
+            sleep 1
           done
 
           if [ -n "$PUBLIC_SWAGGER_TOKEN" ]; then
@@ -110,21 +110,24 @@ jobs:
           VPN_CONFIG_BASE64: ${{ secrets.VPN_CONFIG_BASE64 }}
           VPN_USERNAME: ${{ secrets.VPN_USERNAME }}
           VPN_PASSWORD: ${{ secrets.VPN_PASSWORD }}
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: l
         run: |
           if [ "${{ steps.cache-openvpn.outputs.cache-hit }}" == "true" ]; then
             echo "Installing OpenVPN from cache..."
-            sudo DEBIAN_FRONTEND=noninteractive dpkg -i ~/openvpn-debs/*.deb || (sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -f -y -qq)
+            sudo -E dpkg -i ~/openvpn-debs/*.deb || (sudo apt-get update -qq && sudo -E apt-get install -f -y -qq)
           else
             echo "Downloading and caching OpenVPN..."
             mkdir -p ~/openvpn-debs
             sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            sudo -E apt-get install -y -qq --no-install-recommends \
               -o dir::cache::archives="$HOME/openvpn-debs" openvpn
           fi
 
           echo "$VPN_CONFIG_BASE64" | base64 -d > /tmp/vpn.ovpn
           sed -i 's/\r$//' /tmp/vpn.ovpn
           sed -i '/block-outside-dns/d' /tmp/vpn.ovpn
+          sed -i '/redirect-gateway/d' /tmp/vpn.ovpn
 
           printf "%s\n%s\n" "$VPN_USERNAME" "$VPN_PASSWORD" > /tmp/vpn-auth.txt
           chmod 600 /tmp/vpn-auth.txt
@@ -132,6 +135,7 @@ jobs:
           sudo openvpn --config /tmp/vpn.ovpn \
             --auth-user-pass /tmp/vpn-auth.txt \
             --disable-dco \
+            --pull-filter ignore "redirect-gateway" \
             --verb 3 > /tmp/openvpn.log 2>&1 &
 
           for i in $(seq 1 30); do
@@ -139,7 +143,7 @@ jobs:
               echo "OpenVPN connected (tun0 is up)!"
               break
             fi
-            sleep 2
+            sleep 1
           done
 
           if ! ip a show tun0 >/dev/null 2>&1; then
@@ -162,7 +166,7 @@ jobs:
           for i in $(seq 1 30); do
             if curl -s -o /dev/null http://localhost:8082; then break; fi
             if ! kill -0 "$APP_PID" 2>/dev/null; then cat /tmp/app.log; exit 1; fi
-            sleep 2
+            sleep 1
           done
 
           if ! curl -f --max-time 180 -X POST "http://localhost:8082/api/analyzer/discover/generate"; then
@@ -229,12 +233,12 @@ jobs:
           for i in $(seq 1 30); do
             if curl -s -o /dev/null http://localhost:8080; then break; fi
             if ! kill -0 "$APP_PID" 2>/dev/null; then cat /tmp/app.log; exit 1; fi
-            sleep 2
+            sleep 1
           done
 
           if ! curl -f --max-time 180 -X POST "http://localhost:8080/api/analyzer/scan" \
             -H "Content-Type: application/json" \
-            -d '{"repositoryPath": "/tmp/azure-source-code"}' \
+            -d '{"repositoryPath": "/tmp/azure-source-code/"}' \
             -o source-code.json; then
             echo "=== source-code-analyzer App Log ==="
             cat /tmp/app.log
