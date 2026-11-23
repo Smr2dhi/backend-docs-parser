@@ -133,9 +133,6 @@ jobs:
           printf "%s\n" "$VPN_PASSWORD" > /tmp/vpn-pass.txt
           chmod 600 /tmp/vpn-pass.txt
 
-          REMOTE_LINE=$(grep -E '^remote ' /tmp/vpn.ovpn | head -n 1)
-          echo "Connecting to: $REMOTE_LINE"
-
           sudo openvpn --config /tmp/vpn.ovpn \
             --askpass /tmp/vpn-pass.txt \
             --disable-dco \
@@ -161,10 +158,19 @@ jobs:
       - name: Run liferay-api-analyzer
         working-directory: ./liferay-api-analyzer
         env:
-          LIFERAY_BASE_URL: ${{ vars.LIFERAY_BASE_URL }}
-          LIFERAY_CLIENT_ID: ${{ secrets.LIFERAY_CLIENT_ID }}
-          LIFERAY_CLIENT_SECRET: ${{ secrets.LIFERAY_CLIENT_SECRET }}
+          RAW_BASE_URL: ${{ vars.LIFERAY_BASE_URL }}
+          RAW_CLIENT_ID: ${{ secrets.LIFERAY_CLIENT_ID }}
+          RAW_CLIENT_SECRET: ${{ secrets.LIFERAY_CLIENT_SECRET }}
         run: |
+          export LIFERAY_BASE_URL=$(printf "%s" "$RAW_BASE_URL" | tr -d '[:space:]')
+          export LIFERAY_CLIENT_ID=$(printf "%s" "$RAW_CLIENT_ID" | tr -d '[:space:]')
+          export LIFERAY_CLIENT_SECRET=$(printf "%s" "$RAW_CLIENT_SECRET" | tr -d '[:space:]')
+
+          if [ -z "$LIFERAY_CLIENT_ID" ] || [ -z "$LIFERAY_CLIENT_SECRET" ]; then
+            echo "ERROR: LIFERAY_CLIENT_ID or LIFERAY_CLIENT_SECRET is empty in GitHub Secrets!"
+            exit 1
+          fi
+
           JAR_FILE=$(find target -maxdepth 1 -name "*.jar" ! -name "*original*" | head -n 1)
           java -jar "$JAR_FILE" > /tmp/app.log 2>&1 &
           APP_PID=$!
