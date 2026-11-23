@@ -11,9 +11,9 @@ concurrency:
 
 jobs:
   # ==========================================
-  # JOB 1: PUBLIC SWAGGER PARSER (Port 8082 - No VPN)
+  # JOB 1: SPRINGBOOT API PARSER (Port 8082 - No VPN)
   # ==========================================
-  public-swagger:
+  springboot:
     if: vars.PUBLIC_SWAGGER_URL != ''
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -48,10 +48,10 @@ jobs:
           done
 
           if [ -n "$PUBLIC_SWAGGER_TOKEN" ]; then
-            PAYLOAD=$(jq -n --arg url "$PUBLIC_SWAGGER_URL" --arg name "${PUBLIC_PROJECT_NAME:-Public API}" --arg tok "$PUBLIC_SWAGGER_TOKEN" \
+            PAYLOAD=$(jq -n --arg url "$PUBLIC_SWAGGER_URL" --arg name "${PUBLIC_PROJECT_NAME:-SpringBoot API}" --arg tok "$PUBLIC_SWAGGER_TOKEN" \
               '{sourceUrl: $url, projectName: $name, authentication: {type: "BEARER", token: $tok}}')
           else
-            PAYLOAD=$(jq -n --arg url "$PUBLIC_SWAGGER_URL" --arg name "${PUBLIC_PROJECT_NAME:-Public API}" \
+            PAYLOAD=$(jq -n --arg url "$PUBLIC_SWAGGER_URL" --arg name "${PUBLIC_PROJECT_NAME:-SpringBoot API}" \
               '{sourceUrl: $url, projectName: $name}')
           fi
 
@@ -68,12 +68,12 @@ jobs:
           wait "$APP_PID" 2>/dev/null || true
 
           LATEST_JSON=$(ls -t generated/*.json | head -n 1)
-          cp "$LATEST_JSON" public-swagger.json
+          cp "$LATEST_JSON" springboot.json
 
       - uses: actions/upload-artifact@v4
         with:
-          name: public-swagger
-          path: api-documentation-generator/public-swagger.json
+          name: springboot
+          path: api-documentation-generator/springboot.json
           retention-days: 1
 
   # ==========================================
@@ -192,7 +192,7 @@ jobs:
           wait "$APP_PID" 2>/dev/null || true
 
           LATEST_JSON=$(ls -t generated/*.json | head -n 1)
-          cp "$LATEST_JSON" liferay-api.json
+          cp "$LATEST_JSON" liferay.json
 
       - name: Disconnect OpenVPN
         if: always()
@@ -203,13 +203,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: liferay
-          path: liferay-api-analyzer/liferay-api.json
+          path: liferay-api-analyzer/liferay.json
           retention-days: 1
 
   # ==========================================
-  # JOB 3: SOURCE CODE ANALYZER (Port 8080 - No VPN)
+  # JOB 3: TECHNICAL SOURCE CODE ANALYZER (Port 8080 - No VPN)
   # ==========================================
-  source-code-analyzer:
+  technical:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -251,7 +251,7 @@ jobs:
           if ! curl -f --max-time 180 -X POST "http://localhost:8080/api/analyzer/scan" \
             -H "Content-Type: application/json" \
             -d '{"repositoryPath": "/tmp/azure-source-code/"}' \
-            -o source-code.json; then
+            -o technical.json; then
             echo "=== source-code-analyzer App Log ==="
             cat /tmp/app.log
             kill -TERM "$APP_PID" || true
@@ -267,15 +267,15 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: source-code
-          path: source-code-analyzer/source-code.json
+          name: technical
+          path: source-code-analyzer/technical.json
           retention-days: 1
 
   # ==========================================
   # JOB 4: SHA-256 DEDUP, PUSH & DISPATCH
   # ==========================================
   push-to-central-hub:
-    needs: [public-swagger, liferay-analyzer, source-code-analyzer]
+    needs: [springboot, liferay-analyzer, technical]
     if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -289,11 +289,24 @@ jobs:
         id: push_data
         run: |
           git clone --depth 1 https://x-access-token:${{ secrets.CENTRAL_REPO_PAT }}@github.com/harshh122/central-docs-hub.git central-docs
-          mkdir -p central-docs/backend
+          mkdir -p central-docs/backend/api/liferay central-docs/backend/api/springboot central-docs/backend/technical
 
           find output -type f -name "*.json" | while read -r file; do
             rel_path="${file#output/}"
-            dest="central-docs/backend/$rel_path"
+            case "$rel_path" in
+              springboot/*)
+                dest="central-docs/backend/api/$rel_path"
+                ;;
+              liferay/*)
+                dest="central-docs/backend/api/$rel_path"
+                ;;
+              technical/*)
+                dest="central-docs/backend/$rel_path"
+                ;;
+              *)
+                dest="central-docs/backend/$rel_path"
+                ;;
+            esac
             mkdir -p "$(dirname "$dest")"
 
             jq -S -c . "$file" > /tmp/normalized.json
@@ -301,9 +314,9 @@ jobs:
             old_hash=$([ -f "$dest" ] && sha256sum "$dest" | awk '{print $1}' || echo "")
 
             if [ "$new_hash" = "$old_hash" ]; then
-              echo "Skipping unchanged JSON (SHA-256 match): $rel_path"
+              echo "Skipping unchanged JSON (SHA-256 match): ${dest#central-docs/}"
             else
-              echo "Updating JSON (SHA-256 changed): $rel_path"
+              echo "Updating JSON (SHA-256 changed): ${dest#central-docs/}"
               cp /tmp/normalized.json "$dest"
             fi
           done
