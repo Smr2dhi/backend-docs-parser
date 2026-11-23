@@ -2,7 +2,7 @@ name: Pipeline 2 - Backend Docs Generator
 
 on:
   # schedule:
-  #   - cron: '30 18 * * *' # All jobs green hone ke baad uncomment kar lena
+  #   - cron: '30 18 * * *' # Uncomment when ready for daily scheduled runs
   workflow_dispatch:
 
 concurrency:
@@ -16,7 +16,7 @@ jobs:
   public-swagger:
     if: vars.PUBLIC_SWAGGER_URL != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
 
@@ -81,7 +81,7 @@ jobs:
   # ==========================================
   liferay-analyzer:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
 
@@ -211,7 +211,7 @@ jobs:
   # ==========================================
   source-code-analyzer:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
 
@@ -278,7 +278,7 @@ jobs:
     needs: [public-swagger, liferay-analyzer, source-code-analyzer]
     if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 3
     steps:
       - name: Download Generated JSONs
         uses: actions/download-artifact@v4
