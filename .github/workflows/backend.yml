@@ -1,494 +1,327 @@
 name: Pipeline 2 - Backend Docs Generator
- 
+
 on:
-  # Uncomment after final testing:
   # schedule:
-  #   - cron: '30 18 * * *'
+  #   - cron: '30 18 * * *' # Final testing pass hone ke baad uncomment kar lena
   workflow_dispatch:
- 
+
 concurrency:
   group: pipeline-2-backend
   cancel-in-progress: false
- 
-permissions:
-  contents: read
- 
+
 jobs:
-  # JOB 1: PUBLIC SWAGGER PARSER (port 8082; no VPN)
+  # ==========================================
+  # JOB 1: PUBLIC SWAGGER PARSER (Port 8082 - No VPN)
+  # ==========================================
   public-swagger:
-    if: ${{ vars.PUBLIC_SWAGGER_URL != '' }}
+    if: vars.PUBLIC_SWAGGER_URL != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
- 
+
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '21'
-          cache: maven
+          cache: 'maven'
           cache-dependency-path: api-documentation-generator/pom.xml
- 
-      - name: Build and run API documentation generator
+
+      - name: Build & Run api-documentation-generator
         working-directory: ./api-documentation-generator
         env:
           PUBLIC_SWAGGER_URL: ${{ vars.PUBLIC_SWAGGER_URL }}
           PUBLIC_PROJECT_NAME: ${{ vars.PUBLIC_PROJECT_NAME }}
           PUBLIC_SWAGGER_TOKEN: ${{ secrets.PUBLIC_SWAGGER_TOKEN }}
         run: |
-          set -Eeuo pipefail
           chmod +x mvnw
           ./mvnw -B package -DskipTests
- 
-          JAR_FILE="$(find target -maxdepth 1 -type f -name '*.jar' ! -name '*original*' -print -quit)"
-          if [ -z "$JAR_FILE" ]; then
-            echo 'ERROR: API documentation generator JAR was not found.'
-            exit 1
-          fi
- 
-          java -jar "$JAR_FILE" > /tmp/public-swagger-app.log 2>&1 &
+
+          JAR_FILE=$(find target -maxdepth 1 -name "*.jar" ! -name "*original*" | head -n 1)
+          java -jar "$JAR_FILE" > /tmp/app.log 2>&1 &
           APP_PID=$!
-          cleanup() {
-            kill -TERM "$APP_PID" 2>/dev/null || true
-            wait "$APP_PID" 2>/dev/null || true
-          }
-          trap cleanup EXIT
- 
-          READY=false
-          for i in $(seq 1 60); do
-            if curl --silent --output /dev/null --max-time 2 http://127.0.0.1:8082; then
-              READY=true
-              break
-            fi
-            if ! kill -0 "$APP_PID" 2>/dev/null; then
-              echo 'ERROR: API documentation generator stopped during startup.'
-              cat /tmp/public-swagger-app.log
-              exit 1
-            fi
+
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:8082; then break; fi
+            if ! kill -0 "$APP_PID" 2>/dev/null; then cat /tmp/app.log; exit 1; fi
             sleep 1
           done
-          if [ "$READY" != true ]; then
-            echo 'ERROR: API documentation generator did not become ready on port 8082.'
-            cat /tmp/public-swagger-app.log
-            exit 1
-          fi
- 
-          if [ -n "${PUBLIC_SWAGGER_TOKEN:-}" ]; then
-            PAYLOAD="$(jq -n \
-              --arg url "$PUBLIC_SWAGGER_URL" \
-              --arg name "${PUBLIC_PROJECT_NAME:-Public API}" \
-              --arg token "$PUBLIC_SWAGGER_TOKEN" \
-              '{sourceUrl:$url,projectName:$name,authentication:{type:"BEARER",token:$token}}')"
+
+          if [ -n "$PUBLIC_SWAGGER_TOKEN" ]; then
+            PAYLOAD=$(jq -n --arg url "$PUBLIC_SWAGGER_URL" --arg name "${PUBLIC_PROJECT_NAME:-Public API}" --arg tok "$PUBLIC_SWAGGER_TOKEN" \
+              '{sourceUrl: $url, projectName: $name, authentication: {type: "BEARER", token: $tok}}')
           else
-            PAYLOAD="$(jq -n \
-              --arg url "$PUBLIC_SWAGGER_URL" \
-              --arg name "${PUBLIC_PROJECT_NAME:-Public API}" \
-              '{sourceUrl:$url,projectName:$name}')"
+            PAYLOAD=$(jq -n --arg url "$PUBLIC_SWAGGER_URL" --arg name "${PUBLIC_PROJECT_NAME:-Public API}" \
+              '{sourceUrl: $url, projectName: $name}')
           fi
- 
-          if ! curl --fail --show-error --silent --max-time 180 \
-            -X POST 'http://127.0.0.1:8082/api/v1/documentation/generate/url' \
-            -H 'Content-Type: application/json' \
-            --data "$PAYLOAD"; then
-            echo 'ERROR: Public Swagger generation request failed.'
-            cat /tmp/public-swagger-app.log
+
+          if ! curl -f --max-time 180 -X POST "http://localhost:8082/api/v1/documentation/generate/url" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"; then
+            echo "=== api-documentation-generator App Log ==="
+            cat /tmp/app.log
+            kill -TERM "$APP_PID" || true
             exit 1
           fi
- 
-          LATEST_JSON="$(find generated -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)"
-          if [ -z "$LATEST_JSON" ] || [ ! -f "$LATEST_JSON" ]; then
-            echo 'ERROR: No generated Swagger JSON was found in api-documentation-generator/generated/.'
-            exit 1
-          fi
-          jq -e . "$LATEST_JSON" > /dev/null
+
+          kill -TERM "$APP_PID" || true
+          wait "$APP_PID" 2>/dev/null || true
+
+          LATEST_JSON=$(ls -t generated/*.json | head -n 1)
           cp "$LATEST_JSON" public-swagger.json
- 
+
       - uses: actions/upload-artifact@v4
         with:
           name: public-swagger
           path: api-documentation-generator/public-swagger.json
-          if-no-files-found: error
           retention-days: 1
- 
-  # JOB 2: LIFERAY API ANALYZER (port 8082; requires VPN)
+
+  # ==========================================
+  # JOB 2: LIFERAY API ANALYZER (Port 8082 + VPN)
+  # ==========================================
   liferay-analyzer:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
- 
+
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '21'
-          cache: maven
+          cache: 'maven'
           cache-dependency-path: liferay-api-analyzer/pom.xml
- 
-      - name: Build Liferay API analyzer
+
+      - name: Build liferay-api-analyzer
         working-directory: ./liferay-api-analyzer
         run: |
-          set -Eeuo pipefail
           chmod +x mvnw
           ./mvnw -B package -DskipTests
-          JAR_FILE="$(find target -maxdepth 1 -type f -name '*.jar' ! -name '*original*' -print -quit)"
-          if [ -z "$JAR_FILE" ]; then
-            echo 'ERROR: Liferay analyzer JAR was not found.'
-            exit 1
-          fi
- 
-      - name: Install OpenVPN
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends openvpn
-          openvpn --version | head -n 1
-          if [ ! -c /dev/net/tun ]; then
-            sudo modprobe tun || true
-          fi
-          if [ ! -c /dev/net/tun ]; then
-            echo 'ERROR: /dev/net/tun is unavailable on this runner. OpenVPN cannot create a tunnel here.'
-            exit 1
-          fi
- 
+
+      - name: Cache OpenVPN Packages
+        id: cache-openvpn
+        uses: actions/cache@v4
+        with:
+          path: ~/openvpn-debs
+          key: ${{ runner.os }}-openvpn-debs-v1
+
       - name: Connect to OpenVPN
         env:
           VPN_CONFIG_BASE64: ${{ secrets.VPN_CONFIG_BASE64 }}
           VPN_USERNAME: ${{ secrets.VPN_USERNAME }}
           VPN_PASSWORD: ${{ secrets.VPN_PASSWORD }}
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: l
         run: |
-          set -Eeuo pipefail
- 
-          if [ -z "${VPN_CONFIG_BASE64:-}" ] || [ -z "${VPN_USERNAME:-}" ] || [ -z "${VPN_PASSWORD:-}" ]; then
-            echo 'ERROR: VPN_CONFIG_BASE64, VPN_USERNAME, or VPN_PASSWORD secret is empty.'
-            exit 1
+          mkdir -p ~/openvpn-debs
+          sudo chown -R _apt:root ~/openvpn-debs
+
+          if [ "${{ steps.cache-openvpn.outputs.cache-hit }}" == "true" ]; then
+            echo "Installing OpenVPN from cache..."
+            sudo -E dpkg -i ~/openvpn-debs/*.deb || (sudo apt-get update -qq && sudo -E apt-get install -f -y -qq)
+          else
+            echo "Downloading and caching OpenVPN..."
+            sudo apt-get update -qq
+            sudo -E apt-get install -y -qq --no-install-recommends \
+              -o dir::cache::archives="$HOME/openvpn-debs" openvpn
           fi
- 
-          # Decode the original .ovpn file; do not remove routing directives from it.
-          printf '%s' "$VPN_CONFIG_BASE64" | tr -d '[:space:]' | base64 --decode > /tmp/vpn.ovpn
-          if [ ! -s /tmp/vpn.ovpn ]; then
-            echo 'ERROR: Decoded VPN configuration is empty.'
-            exit 1
-          fi
+
+          printf "%s" "$VPN_CONFIG_BASE64" | tr -d '[:space:]' | base64 -d > /tmp/vpn.ovpn
           sed -i 's/\r$//' /tmp/vpn.ovpn
-          if ! grep -Eq '^[[:space:]]*remote[[:space:]]+' /tmp/vpn.ovpn; then
-            echo 'ERROR: The decoded .ovpn file has no remote server directive.'
-            exit 1
-          fi
- 
-          printf '%s\n%s\n' "$VPN_USERNAME" "$VPN_PASSWORD" > /tmp/vpn-auth.txt
-          chmod 600 /tmp/vpn.ovpn /tmp/vpn-auth.txt
- 
-          # Daemon mode keeps the VPN alive for the following job steps.
-          sudo openvpn \
-            --config /tmp/vpn.ovpn \
+          sed -i '/block-outside-dns/d' /tmp/vpn.ovpn
+          sed -i '/redirect-gateway/d' /tmp/vpn.ovpn
+
+          printf "%s\n%s\n" "$VPN_USERNAME" "$VPN_PASSWORD" > /tmp/vpn-auth.txt
+          chmod 600 /tmp/vpn-auth.txt
+
+          sudo openvpn --config /tmp/vpn.ovpn \
             --auth-user-pass /tmp/vpn-auth.txt \
             --auth-nocache \
             --disable-dco \
-            --pull-filter ignore 'redirect-gateway' \
-            --writepid /run/openvpn-github-actions.pid \
-            --log /tmp/openvpn.log \
-            --verb 4 \
-            --daemon github-actions-openvpn
- 
-          CONNECTED=false
-          for i in $(seq 1 120); do
-            if [ -f /tmp/openvpn.log ] && grep -q 'Initialization Sequence Completed' /tmp/openvpn.log; then
-              CONNECTED=true
+            --pull-filter ignore "redirect-gateway" \
+            --verb 4 > /tmp/openvpn.log 2>&1 &
+
+          for i in $(seq 1 30); do
+            if ip a show tun0 >/dev/null 2>&1; then
+              echo "OpenVPN connected (tun0 is up)!"
               break
-            fi
-            if [ -f /run/openvpn-github-actions.pid ]; then
-              VPN_PID="$(cat /run/openvpn-github-actions.pid)"
-              if ! sudo kill -0 "$VPN_PID" 2>/dev/null; then
-                echo 'ERROR: OpenVPN process exited before connecting.'
-                break
-              fi
             fi
             sleep 1
           done
- 
-          if [ "$CONNECTED" != true ]; then
-            echo 'ERROR: OpenVPN did not complete its connection within 120 seconds.'
-            echo '========== OPENVPN LOG (last 150 lines) =========='
-            sudo tail -n 150 /tmp/openvpn.log 2>/dev/null || true
-            echo '========== TUN DEVICE =========='
-            ls -l /dev/net/tun 2>/dev/null || true
-            echo '========== NETWORK INTERFACES =========='
-            ip -brief address || true
+
+          if ! ip a show tun0 >/dev/null 2>&1; then
+            echo "OpenVPN failed to connect:"
+            sudo cat /tmp/openvpn.log
+            echo "=== Network interfaces ==="
+            ip a
             exit 1
           fi
- 
-          echo 'OpenVPN reports: Initialization Sequence Completed.'
-          ip -brief address
-          if ! ip -o link show | grep -Eq ': tun[0-9]*:'; then
-            echo 'ERROR: OpenVPN reported initialization complete, but no tun interface is visible.'
-            sudo tail -n 100 /tmp/openvpn.log
-            exit 1
-          fi
-          echo 'VPN tunnel interface is available.'
- 
-      - name: Run Liferay API analyzer
+
+      - name: Run liferay-api-analyzer
         working-directory: ./liferay-api-analyzer
         env:
           LIFERAY_BASE_URL: ${{ vars.LIFERAY_BASE_URL }}
           LIFERAY_CLIENT_ID: ${{ secrets.LIFERAY_CLIENT_ID }}
           LIFERAY_CLIENT_SECRET: ${{ secrets.LIFERAY_CLIENT_SECRET }}
         run: |
-          set -Eeuo pipefail
-          if [ -z "${LIFERAY_BASE_URL:-}" ]; then
-            echo 'ERROR: LIFERAY_BASE_URL repository variable is missing.'
-            exit 1
-          fi
- 
-          JAR_FILE="$(find target -maxdepth 1 -type f -name '*.jar' ! -name '*original*' -print -quit)"
-          if [ -z "$JAR_FILE" ]; then
-            echo 'ERROR: Liferay analyzer JAR was not found.'
-            exit 1
-          fi
- 
-          java -jar "$JAR_FILE" > /tmp/liferay-analyzer-app.log 2>&1 &
+          JAR_FILE=$(find target -maxdepth 1 -name "*.jar" ! -name "*original*" | head -n 1)
+          java -jar "$JAR_FILE" > /tmp/app.log 2>&1 &
           APP_PID=$!
-          cleanup_app() {
-            kill -TERM "$APP_PID" 2>/dev/null || true
-            wait "$APP_PID" 2>/dev/null || true
-          }
-          trap cleanup_app EXIT
- 
-          READY=false
-          for i in $(seq 1 60); do
-            if curl --silent --output /dev/null --max-time 2 http://127.0.0.1:8082; then
-              READY=true
-              break
-            fi
-            if ! kill -0 "$APP_PID" 2>/dev/null; then
-              echo 'ERROR: Liferay analyzer stopped during startup.'
-              cat /tmp/liferay-analyzer-app.log
-              exit 1
-            fi
+
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:8082; then break; fi
+            if ! kill -0 "$APP_PID" 2>/dev/null; then cat /tmp/app.log; exit 1; fi
             sleep 1
           done
-          if [ "$READY" != true ]; then
-            echo 'ERROR: Liferay analyzer did not become ready on port 8082.'
-            cat /tmp/liferay-analyzer-app.log
+
+          if ! curl -f --max-time 180 -X POST "http://localhost:8082/api/analyzer/discover/generate"; then
+            echo "=== liferay-api-analyzer App Log ==="
+            cat /tmp/app.log
+            kill -TERM "$APP_PID" || true
             exit 1
           fi
- 
-          if ! curl --fail --show-error --silent --max-time 180 \
-            -X POST 'http://127.0.0.1:8082/api/analyzer/discover/generate'; then
-            echo 'ERROR: Liferay API analysis request failed.'
-            cat /tmp/liferay-analyzer-app.log
-            exit 1
-          fi
- 
-          LATEST_JSON="$(find generated -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)"
-          if [ -z "$LATEST_JSON" ] || [ ! -f "$LATEST_JSON" ]; then
-            echo 'ERROR: No generated Liferay JSON was found in liferay-api-analyzer/generated/.'
-            exit 1
-          fi
-          jq -e . "$LATEST_JSON" > /dev/null
+
+          kill -TERM "$APP_PID" || true
+          wait "$APP_PID" 2>/dev/null || true
+
+          LATEST_JSON=$(ls -t generated/*.json | head -n 1)
           cp "$LATEST_JSON" liferay-api.json
- 
-      - name: Disconnect OpenVPN and clean credentials
+
+      - name: Disconnect OpenVPN
         if: always()
         run: |
-          if [ -f /run/openvpn-github-actions.pid ]; then
-            VPN_PID="$(cat /run/openvpn-github-actions.pid)"
-            sudo kill "$VPN_PID" 2>/dev/null || true
-          fi
-          sudo pkill -TERM -f '[o]penvpn.*vpn.ovpn' 2>/dev/null || true
-          rm -f /tmp/vpn.ovpn /tmp/vpn-auth.txt /run/openvpn-github-actions.pid
- 
+          sudo killall openvpn || true
+          rm -f /tmp/vpn.ovpn /tmp/vpn-auth.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: liferay
           path: liferay-api-analyzer/liferay-api.json
-          if-no-files-found: error
           retention-days: 1
- 
-  # JOB 3: SOURCE CODE ANALYZER (port 8080; no VPN)
+
+  # ==========================================
+  # JOB 3: SOURCE CODE ANALYZER (Port 8080 - No VPN)
+  # ==========================================
   source-code-analyzer:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
- 
+
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '21'
-          cache: maven
+          cache: 'maven'
           cache-dependency-path: source-code-analyzer/pom.xml
- 
-      - name: Clone source code from Azure DevOps
+
+      - name: Clone Source Code from Azure DevOps
         env:
           AZURE_USERNAME: ${{ secrets.AZURE_USERNAME }}
           AZURE_PASSWORD: ${{ secrets.AZURE_PASSWORD }}
           AZURE_REPO_URL: ${{ vars.AZURE_REPO_URL }}
         run: |
-          set -Eeuo pipefail
-          if [ -z "${AZURE_USERNAME:-}" ] || [ -z "${AZURE_PASSWORD:-}" ] || [ -z "${AZURE_REPO_URL:-}" ]; then
-            echo 'ERROR: AZURE_USERNAME, AZURE_PASSWORD, or AZURE_REPO_URL is missing.'
-            exit 1
-          fi
- 
-          REPO_URL="$AZURE_REPO_URL"
-          REPO_URL="${REPO_URL#https://}"
-          REPO_URL="${REPO_URL#http://}"
-          AUTH="$(printf '%s' "$AZURE_USERNAME:$AZURE_PASSWORD" | base64 -w 0)"
-          git -c "http.extraheader=AUTHORIZATION: Basic $AUTH" \
-            clone --depth 1 "https://$REPO_URL" /tmp/azure-source-code
-          unset AUTH
- 
-      - name: Build and run source code analyzer
+          ENC_USER=$(jq -rn --arg v "$AZURE_USERNAME" '$v|@uri')
+          ENC_PASS=$(jq -rn --arg v "$AZURE_PASSWORD" '$v|@uri')
+          git clone --depth 1 "https://${ENC_USER}:${ENC_PASS}@${AZURE_REPO_URL}" /tmp/azure-source-code
+
+      - name: Build & Run source-code-analyzer
         working-directory: ./source-code-analyzer
         run: |
-          set -Eeuo pipefail
           chmod +x mvnw
           ./mvnw -B package -DskipTests
- 
-          JAR_FILE="$(find target -maxdepth 1 -type f -name '*.jar' ! -name '*original*' -print -quit)"
-          if [ -z "$JAR_FILE" ]; then
-            echo 'ERROR: Source code analyzer JAR was not found.'
-            exit 1
-          fi
- 
-          java -jar "$JAR_FILE" > /tmp/source-code-analyzer-app.log 2>&1 &
+
+          JAR_FILE=$(find target -maxdepth 1 -name "*.jar" ! -name "*original*" | head -n 1)
+          java -jar "$JAR_FILE" > /tmp/app.log 2>&1 &
           APP_PID=$!
-          cleanup_app() {
-            kill -TERM "$APP_PID" 2>/dev/null || true
-            wait "$APP_PID" 2>/dev/null || true
-          }
-          trap cleanup_app EXIT
- 
-          READY=false
-          for i in $(seq 1 60); do
-            if curl --silent --output /dev/null --max-time 2 http://127.0.0.1:8080; then
-              READY=true
-              break
-            fi
-            if ! kill -0 "$APP_PID" 2>/dev/null; then
-              echo 'ERROR: Source code analyzer stopped during startup.'
-              cat /tmp/source-code-analyzer-app.log
-              exit 1
-            fi
+
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:8080; then break; fi
+            if ! kill -0 "$APP_PID" 2>/dev/null; then cat /tmp/app.log; exit 1; fi
             sleep 1
           done
-          if [ "$READY" != true ]; then
-            echo 'ERROR: Source code analyzer did not become ready on port 8080.'
-            cat /tmp/source-code-analyzer-app.log
+
+          if ! curl -f --max-time 180 -X POST "http://localhost:8080/api/analyzer/scan" \
+            -H "Content-Type: application/json" \
+            -d '{"repositoryPath": "/tmp/azure-source-code/"}' \
+            -o source-code.json; then
+            echo "=== source-code-analyzer App Log ==="
+            cat /tmp/app.log
+            kill -TERM "$APP_PID" || true
             exit 1
           fi
- 
-          if ! curl --fail --show-error --silent --max-time 180 \
-            -X POST 'http://127.0.0.1:8080/api/analyzer/scan' \
-            -H 'Content-Type: application/json' \
-            --data '{"repositoryPath":"/tmp/azure-source-code/"}' \
-            --output source-code.json; then
-            echo 'ERROR: Source code analysis request failed.'
-            cat /tmp/source-code-analyzer-app.log
-            exit 1
-          fi
-          jq -e . source-code.json > /dev/null
- 
-      - name: Clean up cloned source repository
+
+          kill -TERM "$APP_PID" || true
+          wait "$APP_PID" 2>/dev/null || true
+
+      - name: Cleanup Cloned Source Code
         if: always()
         run: rm -rf /tmp/azure-source-code
- 
+
       - uses: actions/upload-artifact@v4
         with:
           name: source-code
           path: source-code-analyzer/source-code.json
-          if-no-files-found: error
           retention-days: 1
- 
-  # JOB 4: SHA-256 DEDUPLICATION, PUSH JSON, AND DISPATCH PIPELINE 3
+
+  # ==========================================
+  # JOB 4: SHA-256 DEDUP, PUSH & DISPATCH
+  # ==========================================
   push-to-central-hub:
-    needs:
-      - public-swagger
-      - liferay-analyzer
-      - source-code-analyzer
-    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [public-swagger, liferay-analyzer, source-code-analyzer]
+    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
- 
     steps:
-      - name: Download generated JSON artifacts
+      - name: Download Generated JSONs
         uses: actions/download-artifact@v4
         with:
           path: output
- 
-      - name: Normalize JSON, compare SHA-256, and push changes
+
+      - name: Normalize JSON, Compare SHA-256 & Push
         id: push_data
-        env:
-          CENTRAL_REPO_PAT: ${{ secrets.CENTRAL_REPO_PAT }}
         run: |
-          set -Eeuo pipefail
-          if [ -z "${CENTRAL_REPO_PAT:-}" ]; then
-            echo 'ERROR: CENTRAL_REPO_PAT secret is missing.'
-            exit 1
-          fi
- 
-          AUTH="$(printf 'x-access-token:%s' "$CENTRAL_REPO_PAT" | base64 -w 0)"
-          git -c "http.extraheader=AUTHORIZATION: Basic $AUTH" \
-            clone --depth 1 https://github.com/harshh122/central-docs-hub.git central-docs
-          unset AUTH
- 
+          git clone --depth 1 https://x-access-token:${{ secrets.CENTRAL_REPO_PAT }}@github.com/harshh122/central-docs-hub.git central-docs
           mkdir -p central-docs/backend
-          JSON_COUNT=0
-          CHANGED_COUNT=0
- 
-          while IFS= read -r -d '' file; do
-            JSON_COUNT=$((JSON_COUNT + 1))
+
+          find output -type f -name "*.json" | while read -r file; do
             rel_path="${file#output/}"
             dest="central-docs/backend/$rel_path"
             mkdir -p "$(dirname "$dest")"
- 
+
             jq -S -c . "$file" > /tmp/normalized.json
-            NEW_HASH="$(sha256sum /tmp/normalized.json | awk '{print $1}')"
-            if [ -f "$dest" ]; then
-              OLD_HASH="$(sha256sum "$dest" | awk '{print $1}')"
+            new_hash=$(sha256sum /tmp/normalized.json | awk '{print $1}')
+            old_hash=$([ -f "$dest" ] && sha256sum "$dest" | awk '{print $1}' || echo "")
+
+            if [ "$new_hash" = "$old_hash" ]; then
+              echo "Skipping unchanged JSON (SHA-256 match): $rel_path"
             else
-              OLD_HASH=''
-            fi
- 
-            if [ "$NEW_HASH" = "$OLD_HASH" ]; then
-              echo "Unchanged JSON; skipping: $rel_path"
-            else
-              echo "JSON changed; updating: $rel_path"
+              echo "Updating JSON (SHA-256 changed): $rel_path"
               cp /tmp/normalized.json "$dest"
-              CHANGED_COUNT=$((CHANGED_COUNT + 1))
             fi
-          done < <(find output -type f -name '*.json' -print0)
- 
+          done
           rm -f /tmp/normalized.json
-          if [ "$JSON_COUNT" -eq 0 ]; then
-            echo 'ERROR: No JSON artifacts were downloaded from the analyzer jobs.'
-            exit 1
-          fi
- 
+
           cd central-docs
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add backend
- 
-          if git diff --cached --quiet; then
-            echo 'No backend JSON changes detected.'
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
+
+          if git diff --staged --quiet; then
+            echo "No changes for backend."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            git commit -m 'chore: update backend JSON docs'
-            AUTH="$(printf 'x-access-token:%s' "$CENTRAL_REPO_PAT" | base64 -w 0)"
-            git -c "http.extraheader=AUTHORIZATION: Basic $AUTH" pull --rebase origin main
-            git -c "http.extraheader=AUTHORIZATION: Basic $AUTH" push origin HEAD:main
-            unset AUTH
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            git commit -m "chore: update backend JSON docs"
+            git pull --rebase origin main
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
- 
-      - name: Trigger Central Docs Hub Pipeline 3
-        if: ${{ steps.push_data.outputs.changed == 'true' }}
+
+      - name: Trigger Central Hub (Pipeline 3)
+        if: steps.push_data.outputs.changed == 'true'
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.CENTRAL_REPO_PAT }}
           repository: harshh122/central-docs-hub
           event-type: json-data-updated
-          client-payload: '{"source":"backend"}'
+          client-payload: '{"source": "backend"}'
