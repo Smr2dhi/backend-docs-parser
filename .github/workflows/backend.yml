@@ -2,7 +2,7 @@ name: Pipeline 2 - Backend Docs Generator
 
 on:
   # schedule:
-  #   - cron: '30 18 * * *' # All jobs green hone ke baad uncomment kar lena
+  #   - cron: '30 18 * * *' # Final testing pass hone ke baad uncomment kar lena
   workflow_dispatch:
 
 concurrency:
@@ -113,18 +113,20 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
           NEEDRESTART_MODE: l
         run: |
+          mkdir -p ~/openvpn-debs
+          sudo chown -R _apt:root ~/openvpn-debs
+
           if [ "${{ steps.cache-openvpn.outputs.cache-hit }}" == "true" ]; then
             echo "Installing OpenVPN from cache..."
             sudo -E dpkg -i ~/openvpn-debs/*.deb || (sudo apt-get update -qq && sudo -E apt-get install -f -y -qq)
           else
             echo "Downloading and caching OpenVPN..."
-            mkdir -p ~/openvpn-debs
             sudo apt-get update -qq
             sudo -E apt-get install -y -qq --no-install-recommends \
               -o dir::cache::archives="$HOME/openvpn-debs" openvpn
           fi
 
-          echo "$VPN_CONFIG_BASE64" | base64 -d > /tmp/vpn.ovpn
+          printf "%s" "$VPN_CONFIG_BASE64" | tr -d '[:space:]' | base64 -d > /tmp/vpn.ovpn
           sed -i 's/\r$//' /tmp/vpn.ovpn
           sed -i '/block-outside-dns/d' /tmp/vpn.ovpn
           sed -i '/redirect-gateway/d' /tmp/vpn.ovpn
