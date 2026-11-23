@@ -134,12 +134,19 @@ jobs:
           printf "%s\n%s\n" "$VPN_USERNAME" "$VPN_PASSWORD" > /tmp/vpn-auth.txt
           chmod 600 /tmp/vpn-auth.txt
 
+          REMOTE_LINE=$(grep -E '^remote ' /tmp/vpn.ovpn | head -n 1)
+          echo "Connecting to: $REMOTE_LINE"
+
           sudo openvpn --config /tmp/vpn.ovpn \
             --auth-user-pass /tmp/vpn-auth.txt \
             --auth-nocache \
             --disable-dco \
+            --providers legacy default \
             --pull-filter ignore "redirect-gateway" \
-            --verb 4 > /tmp/openvpn.log 2>&1 &
+            --connect-retry 2 5 \
+            --connect-timeout 10 \
+            --verb 4 \
+            --log /tmp/openvpn.log &
 
           for i in $(seq 1 30); do
             if ip a show tun0 >/dev/null 2>&1; then
@@ -152,8 +159,6 @@ jobs:
           if ! ip a show tun0 >/dev/null 2>&1; then
             echo "OpenVPN failed to connect:"
             sudo cat /tmp/openvpn.log
-            echo "=== Network interfaces ==="
-            ip a
             exit 1
           fi
 
