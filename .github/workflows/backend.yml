@@ -2,7 +2,7 @@ name: Pipeline 2 - Backend Docs Generator
 
 on:
   # schedule:
-  #   - cron: '30 18 * * *' # Final testing pass hone ke baad uncomment kar lena
+  #   - cron: '30 18 * * *' # All jobs green hone ke baad uncomment kar lena
   workflow_dispatch:
 
 concurrency:
@@ -134,9 +134,10 @@ jobs:
 
           sudo openvpn --config /tmp/vpn.ovpn \
             --auth-user-pass /tmp/vpn-auth.txt \
+            --auth-nocache \
             --disable-dco \
             --pull-filter ignore "redirect-gateway" \
-            --verb 3 > /tmp/openvpn.log 2>&1 &
+            --verb 4 > /tmp/openvpn.log 2>&1 &
 
           for i in $(seq 1 30); do
             if ip a show tun0 >/dev/null 2>&1; then
@@ -149,6 +150,8 @@ jobs:
           if ! ip a show tun0 >/dev/null 2>&1; then
             echo "OpenVPN failed to connect:"
             sudo cat /tmp/openvpn.log
+            echo "=== Network interfaces ==="
+            ip a
             exit 1
           fi
 
