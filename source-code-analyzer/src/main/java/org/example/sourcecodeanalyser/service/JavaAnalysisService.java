@@ -9,9 +9,11 @@ import org.example.sourcecodeanalyser.extractor.JavaSourceExtractor;
 import org.example.sourcecodeanalyser.model.JavaAnalysisResult;
 import org.example.sourcecodeanalyser.model.JavaClassInfo;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -22,6 +24,9 @@ import java.util.Set;
 
 @Service
 public class JavaAnalysisService {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(JavaAnalysisService.class);
 
     private final JavaSourceExtractor javaSourceExtractor;
     private final JavaClassAnalyzer javaClassAnalyzer;
@@ -35,60 +40,89 @@ public class JavaAnalysisService {
     }
 
     public JavaAnalysisResult analyzeJavaFiles(
-            List<Path> javaFiles) throws IOException {
+            List<Path> javaFiles) {
 
         List<JavaClassInfo> allClassInfos = new ArrayList<>();
 
-        // Store parsed Java files so that we don't parse them twice.
+        // Store successfully parsed Java files.
         Map<Path, CompilationUnit> parsedFiles = new HashMap<>();
 
-        // Store fully qualified names of classes found in this repository.
+        // Store fully qualified names of project classes.
         Set<String> projectTypes = new HashSet<>();
 
-        // PASS 1: Parse all files and collect project class names.
+        // PASS 1: Parse files and collect project class names.
         for (Path javaFile : javaFiles) {
 
-            CompilationUnit compilationUnit =
-                    javaSourceExtractor.extract(javaFile);
+            try {
+                CompilationUnit compilationUnit =
+                        javaSourceExtractor.extract(javaFile);
 
-            parsedFiles.put(javaFile, compilationUnit);
+                parsedFiles.put(javaFile, compilationUnit);
 
-            String packageName = compilationUnit
-                    .getPackageDeclaration()
-                    .map(packageDeclaration ->
-                            packageDeclaration.getNameAsString())
-                    .orElse("");
+                String packageName = compilationUnit
+                        .getPackageDeclaration()
+                        .map(packageDeclaration ->
+                                packageDeclaration.getNameAsString())
+                        .orElse("");
 
-            for (TypeDeclaration<?> type : compilationUnit.getTypes()) {
+                for (TypeDeclaration<?> type :
+                        compilationUnit.getTypes()) {
 
-                String typeName = type.getNameAsString();
+                    String typeName = type.getNameAsString();
 
-                String fullyQualifiedName = packageName.isEmpty()
-                        ? typeName
-                        : packageName + "." + typeName;
+                    String fullyQualifiedName = packageName.isEmpty()
+                            ? typeName
+                            : packageName + "." + typeName;
 
-                projectTypes.add(fullyQualifiedName);
+                    projectTypes.add(fullyQualifiedName);
+                }
+
+            } catch (Exception e) {
+
+                log.warn(
+                        "Skipping Java file {} because parsing failed",
+                        javaFile,
+                        e
+                );
             }
         }
 
-        // PASS 2: Analyze files using the complete project class index.
-        for (Path javaFile : javaFiles) {
+        // Count files successfully analyzed in Pass 2.
+        int successfullyAnalyzedFiles = 0;
 
-            CompilationUnit compilationUnit = parsedFiles.get(javaFile);
+        // PASS 2: Analyze only successfully parsed files.
+        for (Map.Entry<Path, CompilationUnit> entry :
+                parsedFiles.entrySet()) {
 
-            List<JavaClassInfo> classInfos =
-                    javaClassAnalyzer.analyze(
-                            compilationUnit,
-                            javaFile,
-                            projectTypes
-                    );
+            Path javaFile = entry.getKey();
+            CompilationUnit compilationUnit = entry.getValue();
 
-            allClassInfos.addAll(classInfos);
+            try {
+                List<JavaClassInfo> classInfos =
+                        javaClassAnalyzer.analyze(
+                                compilationUnit,
+                                javaFile,
+                                projectTypes
+                        );
+
+                allClassInfos.addAll(classInfos);
+
+                // Increment only after successful analysis.
+                successfullyAnalyzedFiles++;
+
+            } catch (Exception e) {
+
+                log.warn(
+                        "Skipping Java file {} because analysis failed",
+                        javaFile,
+                        e
+                );
+            }
         }
 
         // Create the final Java analysis result.
         return new JavaAnalysisResult(
-                javaFiles.size(),
+                successfullyAnalyzedFiles,
                 allClassInfos
         );
     }

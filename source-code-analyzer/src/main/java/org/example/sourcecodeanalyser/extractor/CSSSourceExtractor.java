@@ -9,11 +9,12 @@ import com.helger.css.decl.ICSSNestedRule;
 import com.helger.css.decl.ICSSTopLevelRule;
 import com.helger.css.decl.CascadingStyleSheet;
 import com.helger.css.reader.CSSReader;
-import com.helger.css.writer.CSSWriterSettings;
 import com.helger.css.reader.CSSReaderSettings;
+import com.helger.css.writer.CSSWriterSettings;
 
 import org.example.sourcecodeanalyser.model.CSSAnalysisResult;
 import org.example.sourcecodeanalyser.model.CSSRuleInfo;
+
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -42,15 +43,25 @@ public class CSSSourceExtractor {
 
     public CSSAnalysisResult extract(Path cssFile) throws IOException {
 
+        if (cssFile == null || !Files.isRegularFile(cssFile)) {
+            throw new IOException(
+                    "CSS file does not exist or is not a regular file: "
+                            + cssFile
+            );
+        }
+
+        // 1. Read CSS source.
         String source = Files.readString(
                 cssFile,
                 StandardCharsets.UTF_8
         );
 
-        CascadingStyleSheet stylesheet = CSSReader.readFromStringReader(
-                source,
-                new CSSReaderSettings()
-        );
+        // 2. Parse CSS source.
+        CascadingStyleSheet stylesheet =
+                CSSReader.readFromStringReader(
+                        source,
+                        new CSSReaderSettings()
+                );
 
         if (stylesheet == null) {
             throw new IOException(
@@ -63,19 +74,21 @@ public class CSSSourceExtractor {
         Set<String> imports = new LinkedHashSet<>();
         Set<String> variables = new LinkedHashSet<>();
 
-        CSSWriterSettings writerSettings = new CSSWriterSettings();
+        CSSWriterSettings writerSettings =
+                new CSSWriterSettings();
 
-        // Extract top-level and nested CSS rules.
+        // 3. Extract top-level and nested CSS rules.
         collectTopLevelRules(
                 stylesheet.getAllRules(),
                 rules,
                 writerSettings
         );
 
-        // Extract CSS imports.
+        // 4. Remove comments before regex-based extraction.
         String sourceWithoutComments =
                 source.replaceAll("(?s)/\\*.*?\\*/", "");
 
+        // 5. Extract CSS imports.
         Matcher importMatcher =
                 IMPORT_PATTERN.matcher(sourceWithoutComments);
 
@@ -83,19 +96,20 @@ public class CSSSourceExtractor {
             imports.add(importMatcher.group(1).trim());
         }
 
-        // Extract CSS custom properties.
-
+        // 6. Extract CSS custom properties.
         Matcher variableMatcher =
                 VARIABLE_PATTERN.matcher(sourceWithoutComments);
 
         while (variableMatcher.find()) {
+
             variables.add(
-                    variableMatcher.group(1) +
-                            ": " + variableMatcher.group(2).trim()
+                    variableMatcher.group(1)
+                            + ": "
+                            + variableMatcher.group(2).trim()
             );
         }
 
-
+        // 7. Return extracted CSS information.
         return new CSSAnalysisResult(
                 cssFile.toString(),
                 rules.size(),
@@ -179,7 +193,8 @@ public class CSSSourceExtractor {
         for (CSSDeclaration declaration : styleRule.getAllDeclarations()) {
 
             declarations.add(
-                    declaration.getProperty() + ": "
+                    declaration.getProperty()
+                            + ": "
                             + declaration.getExpressionAsCSSString()
             );
         }
@@ -187,12 +202,16 @@ public class CSSSourceExtractor {
         int startLine = 0;
         int endLine = 0;
 
-        CSSSourceLocation location = styleRule.getSourceLocation();
+        CSSSourceLocation location =
+                styleRule.getSourceLocation();
 
         if (location != null) {
 
-            int firstLine = location.getFirstTokenBeginLineNumber();
-            int lastLine = location.getLastTokenEndLineNumber();
+            int firstLine =
+                    location.getFirstTokenBeginLineNumber();
+
+            int lastLine =
+                    location.getLastTokenEndLineNumber();
 
             if (firstLine > 0) {
                 startLine = firstLine;

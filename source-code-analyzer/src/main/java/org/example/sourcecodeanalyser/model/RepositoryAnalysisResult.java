@@ -8,15 +8,18 @@ public class RepositoryAnalysisResult {
     private FileDiscoveryResult fileDiscovery;
     private JavaAnalysisResult javaAnalysis;
     private List<CSSAnalysisResult> cssAnalysis;
+    private List<SCSSAnalysisResult> scssAnalysis;
 
     public RepositoryAnalysisResult(
             FileDiscoveryResult fileDiscovery,
             JavaAnalysisResult javaAnalysis,
-            List<CSSAnalysisResult> cssAnalysis) {
+            List<CSSAnalysisResult> cssAnalysis,
+            List<SCSSAnalysisResult> scssAnalysis) {
 
         this.fileDiscovery = fileDiscovery;
         this.javaAnalysis = javaAnalysis;
         this.cssAnalysis = cssAnalysis;
+        this.scssAnalysis = scssAnalysis;
     }
 
     public FileDiscoveryResult getFileDiscovery() {
@@ -29,5 +32,9 @@ public class RepositoryAnalysisResult {
 
     public List<CSSAnalysisResult> getCssAnalysis() {
         return cssAnalysis;
+    }
+
+    public List<SCSSAnalysisResult> getScssAnalysis() {
+        return scssAnalysis;
     }
 }
