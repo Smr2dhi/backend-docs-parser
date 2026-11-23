@@ -34,8 +34,7 @@ jobs:
           PUBLIC_PROJECT_NAME: ${{ vars.PUBLIC_PROJECT_NAME }}
           PUBLIC_SWAGGER_TOKEN: ${{ secrets.PUBLIC_SWAGGER_TOKEN }}
         run: |
-          chmod +x mvnw
-          ./mvnw -B package -DskipTests
+          mvn -B package -DskipTests
 
           JAR_FILE=$(find target -maxdepth 1 -name "*.jar" ! -name "*original*" | head -n 1)
           java -jar "$JAR_FILE" > /tmp/app.log 2>&1 &
@@ -95,8 +94,7 @@ jobs:
       - name: Build liferay-api-analyzer
         working-directory: ./liferay-api-analyzer
         run: |
-          chmod +x mvnw
-          ./mvnw -B package -DskipTests
+          mvn -B package -DskipTests
 
       - name: Cache OpenVPN Packages
         id: cache-openvpn
@@ -235,8 +233,7 @@ jobs:
       - name: Build & Run source-code-analyzer
         working-directory: ./source-code-analyzer
         run: |
-          chmod +x mvnw
-          ./mvnw -B package -DskipTests
+          mvn -B package -DskipTests
 
           JAR_FILE=$(find target -maxdepth 1 -name "*.jar" ! -name "*original*" | head -n 1)
           java -jar "$JAR_FILE" > /tmp/app.log 2>&1 &
